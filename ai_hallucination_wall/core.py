@@ -63,8 +63,21 @@ class AIHallucinationWall:
     @classmethod
     def check_package(cls, package_name: str, ecosystem: str = "auto") -> Optional[ThreatReport]:
         pkg = package_name.strip().lower()
-        # Clean version specifiers like ==1.0, >=2.0, @^18.0
-        pkg = re.split(r"[><=@~]", pkg)[0].strip()
+        if not pkg:
+            return None
+
+        # Clean version specifiers like ==1.0, >=2.0, @^18.0 preserving @scoped/names
+        if pkg.startswith("@"):
+            scope_and_rest = pkg[1:]
+            if "/" in scope_and_rest:
+                scope, rest = scope_and_rest.split("/", 1)
+                pkg_core = re.split(r"[><=@~]", rest)[0].strip()
+                pkg = f"@{scope}/{pkg_core}"
+            else:
+                pkg = re.split(r"[><=@~]", scope_and_rest)[0].strip()
+        else:
+            pkg = re.split(r"[><=@~]", pkg)[0].strip()
+
         if not pkg:
             return None
 
@@ -83,9 +96,12 @@ class AIHallucinationWall:
         if is_npm:
             vetted_pool.update(VETTED_NPM_PACKAGES)
 
+        # For scoped packages like @types/foo, also inspect inner target
+        sub_target = pkg.split("/")[-1] if "/" in pkg else pkg
+
         for base_pkg in vetted_pool:
             for suffix in cls.HALLUCINATED_SUFFIXES:
-                if pkg == f"{base_pkg}{suffix}":
+                if sub_target == f"{base_pkg}{suffix}":
                     return ThreatReport(
                         package_name=pkg,
                         ecosystem="pypi" if base_pkg in VETTED_PYPI_PACKAGES else "npm",
@@ -98,9 +114,9 @@ class AIHallucinationWall:
 
         # 3. Check Typosquatting / Levenshtein distance 1 or 2
         for legitimate in vetted_pool:
-            if len(legitimate) >= 4 and len(pkg) >= 4:
-                dist = Levenshtein.distance(pkg, legitimate)
-                if dist in {1, 2} and pkg != legitimate:
+            if len(legitimate) >= 4 and len(sub_target) >= 4:
+                dist = Levenshtein.distance(sub_target, legitimate)
+                if dist in {1, 2} and sub_target != legitimate:
                     return ThreatReport(
                         package_name=pkg,
                         ecosystem="pypi" if legitimate in VETTED_PYPI_PACKAGES else "npm",
@@ -118,29 +134,41 @@ class AIHallucinationWall:
         threats: List[ThreatReport] = []
         clean = command_str.strip()
 
-        # pip / pip3 install
-        if re.search(r"\b(pip|pip3)\s+install\b", clean):
+        # pip / pip3 / poetry install or add
+        if re.search(r"\b(pip|pip3|poetry)\s+(install|add)\b", clean):
             parts = clean.split()
             idx = 0
             for i, p in enumerate(parts):
-                if p == "install":
+                if p in {"install", "add"}:
                     idx = i + 1
                     break
-            pkgs = [p for p in parts[idx:] if not p.startswith("-")]
+            pkgs = []
+            skip_next = False
+            for p in parts[idx:]:
+                if skip_next:
+                    skip_next = False
+                    continue
+                if p in {"-r", "-f", "-c", "--requirement", "--constraint"}:
+                    skip_next = True
+                    continue
+                if p.startswith("-") or p in {".", "./"}:
+                    continue
+                pkgs.append(p)
+
             for p in pkgs:
                 report = cls.check_package(p, ecosystem="pypi")
                 if report:
                     threats.append(report)
 
-        # npm / yarn / pnpm add / install
-        elif re.search(r"\b(npm\s+i|npm\s+install|yarn\s+add|pnpm\s+add)\b", clean):
+        # npm / yarn / pnpm / bun add / install
+        elif re.search(r"\b(npm\s+i|npm\s+install|npm\s+add|yarn\s+add|pnpm\s+add|bun\s+add)\b", clean):
             parts = clean.split()
             idx = 0
             for i, p in enumerate(parts):
                 if p in {"i", "install", "add"}:
                     idx = i + 1
                     break
-            pkgs = [p for p in parts[idx:] if not p.startswith("-")]
+            pkgs = [p for p in parts[idx:] if not p.startswith("-") and p not in {".", "./"}]
             for p in pkgs:
                 report = cls.check_package(p, ecosystem="npm")
                 if report:

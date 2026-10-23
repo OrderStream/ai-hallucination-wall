@@ -58,6 +58,30 @@ def test_inspect_command():
     good_cmd = "npm install react react-dom"
     assert len(AIHallucinationWall.inspect_command(good_cmd)) == 0
 
+def test_scoped_packages_and_advanced_command_parsing():
+    # 1. Scoped package typosquatting
+    rep = AIHallucinationWall.check_package("@types/expres@4.17.0", ecosystem="npm")
+    assert rep is not None
+    assert rep.threat_type == "TYPOSQUAT"
+    assert rep.matched_target == "express"
+
+    # 2. Legitimate scoped package
+    rep_safe = AIHallucinationWall.check_package("@prisma/client", ecosystem="npm")
+    assert rep_safe is None
+
+    # 3. bun add & poetry add
+    bun_threats = AIHallucinationWall.inspect_command("bun add expres")
+    assert len(bun_threats) == 1
+
+    poetry_threats = AIHallucinationWall.inspect_command("poetry add fastapi-official")
+    assert len(poetry_threats) == 1
+
+    # 4. pip install with -r requirements.txt and bad package
+    pip_flag_threats = AIHallucinationWall.inspect_command("pip install -r requirements.txt reqeusts")
+    assert len(pip_flag_threats) == 1
+    assert pip_flag_threats[0].package_name == "reqeusts"
+
+
 def test_cli_execution(tmp_path):
     req_file = tmp_path / "requirements.txt"
     req_file.write_text("requests==2.31.0\npydantic>=2.0\n", encoding="utf-8")
