@@ -31,7 +31,7 @@ def main(argv=None):
     pkg_parser.add_argument("--ecosystem", default="auto", choices=["auto", "pypi", "npm"], help="Package ecosystem")
 
     # license / donate command
-    subparsers.add_parser("license", help="View license tier and 0% fee crypto donation wallets")
+    subparsers.add_parser("license", help="View license tier and zero-fee crypto donation wallets")
 
     args = parser.parse_args(argv)
 
